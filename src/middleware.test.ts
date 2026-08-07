@@ -9,6 +9,7 @@ import { NextRequest } from "next/server";
 //                      of the test is that these must survive onto whatever
 //                      response the middleware returns — including redirects.
 let mockUser: { id: string } | null = null;
+let mockGetUserError: { code?: string; message: string; status?: number } | null = null;
 let refreshedCookies: Array<{
   name: string;
   value: string;
@@ -29,7 +30,7 @@ vi.mock("@supabase/ssr", () => ({
       // pushes the new cookies through setAll() before resolving.
       getUser: async () => {
         if (refreshedCookies.length) opts.cookies.setAll(refreshedCookies);
-        return { data: { user: mockUser } };
+        return { data: { user: mockUser }, error: mockGetUserError ?? undefined };
       },
     },
   }),
@@ -42,6 +43,7 @@ beforeEach(() => {
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key";
   mockUser = null;
+  mockGetUserError = null;
   refreshedCookies = [];
 });
 
@@ -109,5 +111,23 @@ describe("middleware — refreshed auth cookies survive redirects", () => {
     // No redirect — the normal NextResponse.next() already carries cookies.
     expect(res.headers.get("location")).toBeNull();
     expect(res.cookies.get(ROTATED.name)?.value).toBe(ROTATED.value);
+  });
+
+  it("clears stale auth cookies when the refresh token is missing", async () => {
+    mockGetUserError = {
+      code: "refresh_token_not_found",
+      message: "Refresh Token Not Found",
+      status: 400,
+    };
+
+    const res = await middleware(
+      new NextRequest("https://app.test/dashboard", {
+        headers: { cookie: `${ROTATED.name}=${ROTATED.value}` },
+      }),
+    );
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/login");
+    expect(res.headers.get("set-cookie")).toContain(`${ROTATED.name}=;`);
   });
 });

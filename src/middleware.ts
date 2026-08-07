@@ -1,6 +1,32 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+function isRefreshTokenError(error: { code?: string; message?: string; status?: number } | null | undefined) {
+  if (!error) return false
+
+  const code = error.code?.toLowerCase() ?? ''
+  const message = error.message?.toLowerCase() ?? ''
+  const status = error.status
+
+  return (
+    status === 400 ||
+    status === 401 ||
+    code.includes('refresh_token') ||
+    code.includes('refresh token') ||
+    code.includes('invalid_grant') ||
+    message.includes('refresh token') ||
+    message.includes('refresh_token')
+  )
+}
+
+function clearSupabaseAuthCookies(request: NextRequest, response: NextResponse) {
+  request.cookies.getAll().forEach((cookie) => {
+    if (/^sb-/.test(cookie.name) && /auth-token/.test(cookie.name)) {
+      response.cookies.delete(cookie.name)
+    }
+  })
+}
+
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
 
@@ -23,7 +49,14 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser()
+
+  if (error && isRefreshTokenError(error)) {
+    clearSupabaseAuthCookies(request, supabaseResponse)
+  }
 
   // getUser() transparently refreshes an expired access token, which
   // ROTATES the refresh token and writes the new cookies onto
